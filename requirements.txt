@@ -1,0 +1,28 @@
+# Core Dependencies
+fastapi
+uvicorn[standard]
+anthropic
+sqlalchemy
+pydantic
+
+# Frontend
+streamlit
+
+# Data & Visualization
+pandas
+plotly
+openpyxl
+
+# Utils
+python-dotenv
+requests
+pyyaml
+python-jose[cryptography]
+passlib[bcrypt]
+
+# Email (optional, install when needed)
+# sendgrid==6.11.0
+
+# Testing (optional)
+# pytest==8.0.0
+# httpx==0.26.0
