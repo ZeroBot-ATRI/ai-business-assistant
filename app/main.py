@@ -1,11 +1,24 @@
-# app/main.py - 核心API（极简版）
+# app/main.py - 核心API（Day 2增强版）
 from fastapi import FastAPI, HTTPException
 from anthropic import Anthropic
 import os
 from datetime import datetime
-import sqlite3
 import json
+import time
+import logging
 from dotenv import load_dotenv
+
+# 导入自定义模块
+from app.database import Database
+from app.models import ChatRequest, ChatResponse
+from app.skills import SKILLS as SKILL_REGISTRY
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # 加载环境变量
 load_dotenv()
@@ -13,55 +26,34 @@ load_dotenv()
 # 检查API密钥
 CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
 if not CLAUDE_API_KEY:
+    logger.error("未找到 CLAUDE_API_KEY 环境变量")
     print("⚠️  错误：未找到 CLAUDE_API_KEY 环境变量")
     print("请确保：")
     print("1. .env 文件存在")
     print("2. .env 文件中包含：CLAUDE_API_KEY=sk-ant-xxxxx")
     raise ValueError("CLAUDE_API_KEY 未配置")
 
-app = FastAPI(title="AI Business Assistant")
+app = FastAPI(
+    title="AI Business Assistant",
+    description="企业AI业务助手 API",
+    version="0.2.0"
+)
 client = Anthropic(api_key=CLAUDE_API_KEY)
 
 # 初始化数据库
-def init_db():
-    conn = sqlite3.connect('database.db')
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS ai_decisions
-                 (id INTEGER PRIMARY KEY,
-                  user_input TEXT,
-                  intent TEXT,
-                  action TEXT,
-                  result TEXT,
-                  timestamp TEXT)''')
-    conn.commit()
-    conn.close()
+db = Database()
+logger.info("数据库初始化完成")
 
-init_db()
+# 使用skills.py中的技能库
+SKILLS = SKILL_REGISTRY
+logger.info(f"加载了 {len(SKILLS)} 个技能")
 
-# 核心技能库（硬编码开始，够用就行）
-SKILLS = {
-    "get_order": lambda order_id: {
-        "order_id": order_id,
-        "status": "已发货",
-        "tracking": "SF1234567890",
-        "customer_email": "customer@example.com"
-    },
-    "query_inventory": lambda product_id: {
-        "product_id": product_id,
-        "stock": 100,
-        "warehouse": "深圳仓",
-        "threshold": 20
-    },
-    "send_email": lambda to, content: {
-        "sent": True,
-        "to": to,
-        "timestamp": datetime.now().isoformat()
-    }
-}
+@app.post("/chat", response_model=ChatResponse)
+async def chat(user_input: str, user_id: str = "default"):
+    """核心对话接口（Day 2增强版）"""
+    start_time = time.time()
+    logger.info(f"收到用户请求: user_id={user_id}, input={user_input}")
 
-@app.post("/chat")
-async def chat(user_input: str):
-    """核心对话接口"""
     try:
         # Step 1: 用Claude识别意图并生成执行计划
         response = client.messages.create(
@@ -138,108 +130,155 @@ async def chat(user_input: str):
 
         user_message = final_response.content[0].text
 
-        # Step 5: 记录决策
-        conn = sqlite3.connect('database.db')
-        c = conn.cursor()
-        c.execute("""INSERT INTO ai_decisions
-                     (user_input, intent, action, result, timestamp)
-                     VALUES (?, ?, ?, ?, ?)""",
-                  (user_input, plan["intent"], skill_name,
-                   json.dumps(result, ensure_ascii=False), datetime.now().isoformat()))
-        conn.commit()
-        conn.close()
+        # Step 5: 计算执行时间和成本
+        execution_time_ms = (time.time() - start_time) * 1000
 
-        return {
-            "success": True,
-            "message": user_message,
-            "debug": {
+        # 估算LLM成本（简化版，实际需要根据token数计算）
+        # Claude Sonnet 4: input $3/M tokens, output $15/M tokens
+        # 这里用粗略估算
+        llm_cost = 0.001  # 假设每次调用约0.001美元
+
+        # Step 6: 记录决策（使用新的Database类）
+        db.save_decision(
+            user_input=user_input,
+            intent=plan["intent"],
+            action=skill_name,
+            result=result,
+            user_id=user_id,
+            success=True,
+            execution_time_ms=execution_time_ms,
+            llm_cost=llm_cost
+        )
+
+        logger.info(f"请求处理成功: intent={plan['intent']}, skill={skill_name}, time={execution_time_ms:.0f}ms")
+
+        return ChatResponse(
+            success=True,
+            message=user_message,
+            debug={
                 "intent": plan["intent"],
                 "skill": skill_name,
-                "result": result
+                "result": result,
+                "execution_time_ms": round(execution_time_ms, 2),
+                "llm_cost": llm_cost
             }
-        }
+        )
 
     except json.JSONDecodeError as e:
-        # JSON解析失败，返回详细错误信息
-        return {
-            "success": False,
-            "error": f"JSON解析失败: {str(e)}",
-            "debug": {
+        # JSON解析失败
+        logger.error(f"JSON解析失败: {str(e)}")
+        execution_time_ms = (time.time() - start_time) * 1000
+        db.save_decision(
+            user_input=user_input,
+            intent="解析失败",
+            action="none",
+            result={"error": str(e)},
+            user_id=user_id,
+            success=False,
+            execution_time_ms=execution_time_ms
+        )
+        return ChatResponse(
+            success=False,
+            error=f"JSON解析失败: {str(e)}",
+            message="抱歉，我在理解您的请求时遇到了问题，请重新描述。",
+            debug={
                 "raw_response": plan_text if 'plan_text' in locals() else "未获取到响应",
                 "error_detail": str(e)
             }
-        }
+        )
     except KeyError as e:
         # 缺少必需的字段
-        return {
-            "success": False,
-            "error": f"AI返回的计划缺少必需字段: {str(e)}",
-            "debug": {
+        logger.error(f"AI返回的计划缺少必需字段: {str(e)}")
+        execution_time_ms = (time.time() - start_time) * 1000
+        db.save_decision(
+            user_input=user_input,
+            intent="字段缺失",
+            action="none",
+            result={"error": str(e)},
+            user_id=user_id,
+            success=False,
+            execution_time_ms=execution_time_ms
+        )
+        return ChatResponse(
+            success=False,
+            error=f"AI返回的计划缺少必需字段: {str(e)}",
+            message="抱歉，处理出现异常，请稍后重试。",
+            debug={
                 "plan": plan if 'plan' in locals() else "未解析计划"
             }
-        }
+        )
     except Exception as e:
         # 其他错误
         import traceback
-        return {
-            "success": False,
-            "error": str(e),
-            "debug": {
+        logger.error(f"未知错误: {str(e)}\n{traceback.format_exc()}")
+        execution_time_ms = (time.time() - start_time) * 1000
+        db.save_decision(
+            user_input=user_input,
+            intent="系统错误",
+            action="none",
+            result={"error": str(e)},
+            user_id=user_id,
+            success=False,
+            execution_time_ms=execution_time_ms
+        )
+        return ChatResponse(
+            success=False,
+            error=str(e),
+            message="抱歉，系统出现错误，请稍后重试。",
+            debug={
                 "traceback": traceback.format_exc()
             }
-        }
+        )
 
 @app.get("/")
 def root():
-    return {"status": "AI Assistant Running", "version": "0.1"}
+    """健康检查接口"""
+    return {
+        "status": "AI Assistant Running",
+        "version": "0.2.0",
+        "api": "FastAPI",
+        "llm": "Claude Sonnet 4"
+    }
 
 @app.get("/metrics")
 def metrics():
-    """系统指标接口（用于监控看板）"""
+    """系统指标接口（Day 2增强版 - 用于监控看板）"""
     try:
-        conn = sqlite3.connect('database.db')
-        c = conn.cursor()
+        # 使用新的Database类获取统计数据
+        stats = db.get_today_stats()
+        recent_logs = db.get_recent_decisions(limit=10)
+        intent_dist = db.get_intent_distribution(days=7)
 
-        # 今日处理量
-        c.execute("""SELECT COUNT(*) FROM ai_decisions
-                     WHERE date(timestamp) = date('now')""")
-        today_total = c.fetchone()[0]
-
-        # 成功率（简化版）
-        c.execute("""SELECT COUNT(*) FROM ai_decisions
-                     WHERE result NOT LIKE '%error%'""")
-        success_count = c.fetchone()[0]
-
-        c.execute("SELECT COUNT(*) FROM ai_decisions")
-        total_count = c.fetchone()[0]
-
-        success_rate = success_count / total_count if total_count > 0 else 0
-
-        # 最近日志
-        c.execute("""SELECT user_input, intent, action, timestamp
-                     FROM ai_decisions
-                     ORDER BY timestamp DESC LIMIT 10""")
-        recent_logs = [
-            {
-                "user_input": row[0],
-                "intent": row[1],
-                "result": row[2],
-                "timestamp": row[3]
-            }
-            for row in c.fetchall()
-        ]
-
-        conn.close()
+        # 生成告警
+        alerts = []
+        if stats["success_rate"] < 0.9:
+            alerts.append({
+                "level": "warning",
+                "message": f"成功率较低: {stats['success_rate']:.1%}"
+            })
+        if stats["avg_execution_time_ms"] > 2000:
+            alerts.append({
+                "level": "warning",
+                "message": f"响应时间过慢: {stats['avg_execution_time_ms']:.0f}ms"
+            })
 
         return {
-            "today_total": today_total,
-            "success_rate": success_rate,
-            "avg_response_ms": 1200,  # Mock数据
-            "today_cost": 0.15,  # Mock数据
-            "alerts": [],
-            "recent_logs": recent_logs
+            "today_total": stats["today_total"],
+            "today_delta": 0,  # 需要与昨天对比
+            "success_rate": stats["success_rate"],
+            "success_rate_delta": 0.0,
+            "avg_response_ms": stats["avg_execution_time_ms"],
+            "response_delta": 0.0,
+            "today_cost": stats["today_cost"],
+            "cost_delta": 0.0,
+            "alerts": alerts,
+            "recent_logs": recent_logs,
+            "hourly_stats": [],  # 需要额外查询
+            "intent_distribution": intent_dist,
+            "sop_stats": []  # Day 16-17 实现
         }
     except Exception as e:
+        logger.error(f"获取指标失败: {str(e)}")
         return {"error": str(e)}
 
 # 运行：uvicorn app.main:app --reload
