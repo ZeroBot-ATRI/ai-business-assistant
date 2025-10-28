@@ -11,7 +11,9 @@
       "Bash(gh:*)",
       "Bash(git config:*)",
       "Bash(curl:*)",
-      "Bash(sqlite3:*)"
+      "Bash(sqlite3:*)",
+      "Bash(git push)",
+      "Bash(chmod:*)"
     ],
     "deny": [],
     "ask": []
