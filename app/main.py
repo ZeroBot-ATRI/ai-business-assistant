@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 # 导入自定义模块
 from app.database import Database
 from app.models import ChatRequest, ChatResponse
-from app.skills import SKILLS as SKILL_REGISTRY
+from app.orchestrator import AIOrchestrator  # Day 6新增
 
 # 配置日志
 logging.basicConfig(
@@ -44,9 +44,49 @@ client = Anthropic(api_key=CLAUDE_API_KEY)
 db = Database()
 logger.info("数据库初始化完成")
 
-# 使用skills.py中的技能库
-SKILLS = SKILL_REGISTRY
-logger.info(f"加载了 {len(SKILLS)} 个技能")
+# 选择使用真实技能或Mock技能（Day 4）
+USE_REAL_SKILLS = os.getenv("USE_REAL_SKILLS", "true").lower() == "true"
+
+if USE_REAL_SKILLS:
+    logger.info("使用真实API技能...")
+    from app.skills_real import REAL_SKILLS
+    from app.skills import MockSkills  # 保留Mock技能作为后备
+    from app.notification_skill import notification_skill  # Day 5新增
+
+    # 组合技能：真实技能优先，其他使用Mock
+    SKILLS = {
+        "get_order": REAL_SKILLS["get_order"],
+        "query_inventory": REAL_SKILLS["query_inventory"],
+        "query_logistics": REAL_SKILLS["query_logistics"],
+        # Day 5: 真实邮件通知技能
+        "send_email": notification_skill.send_email,
+        "send_notification": notification_skill.send_notification,
+        # 其他技能继续使用Mock（Day 6会逐步替换）
+        "update_order_status": MockSkills.update_order_status,
+        "generate_apology": MockSkills.generate_apology,
+        "offer_compensation": MockSkills.offer_compensation
+    }
+    logger.info(f"加载了 {len(SKILLS)} 个技能（4个真实API + 3个Mock）")
+else:
+    logger.info("使用Mock技能...")
+    from app.skills import SKILLS as SKILL_REGISTRY
+    SKILLS = SKILL_REGISTRY
+    logger.info(f"加载了 {len(SKILLS)} 个Mock技能")
+
+# Day 6: 初始化AI编排器
+orchestrator = AIOrchestrator(CLAUDE_API_KEY)
+
+# 注册所有技能到编排器
+orchestrator.register_skill("get_order", SKILLS["get_order"], "查询订单信息", {"order_id": "订单号"})
+orchestrator.register_skill("query_inventory", SKILLS["query_inventory"], "查询库存信息", {"product_id": "产品ID（单个字母或数字）"})
+orchestrator.register_skill("query_logistics", SKILLS["query_logistics"], "查询物流信息", {"tracking_number": "物流单号"})
+orchestrator.register_skill("send_email", SKILLS["send_email"], "发送邮件", {"to": "收件人", "subject": "主题", "content": "内容"})
+orchestrator.register_skill("send_notification", SKILLS["send_notification"], "发送通知邮件（使用模板）", {"to": "收件人", "template": "模板名", "context": "模板数据"})
+orchestrator.register_skill("update_order_status", SKILLS["update_order_status"], "更新订单状态", {"order_id": "订单号", "status": "新状态"})
+orchestrator.register_skill("generate_apology", SKILLS["generate_apology"], "生成道歉信", {"order_id": "订单号", "reason": "原因"})
+orchestrator.register_skill("offer_compensation", SKILLS["offer_compensation"], "提供补偿", {"user_id": "用户ID", "policy": "补偿政策"})
+
+logger.info(f"AI编排器初始化完成，已注册 {len(orchestrator.skills)} 个技能")
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(user_input: str, user_id: str = "default"):
@@ -67,8 +107,19 @@ async def chat(user_input: str, user_id: str = "default"):
 
 可用技能：
 - get_order(order_id): 查询订单，参数order_id是订单号字符串
-- query_inventory(product_id): 查询库存，参数product_id是产品ID字符串
-- send_email(to, content): 发送邮件，参数to是邮箱地址，content是邮件内容
+- query_inventory(product_id): 查询库存，参数product_id是产品ID字符串（注意：如果用户说"产品A"，ID应该是"A"，不是"产品A"）
+- send_email(to, subject, content): 发送邮件，必须提供3个参数：to邮箱地址，subject邮件主题，content邮件内容
+- send_notification(to, template, context): 发送通知邮件（使用预置模板），template可选：order_shipped（发货通知）、order_delay（延迟通知）、out_of_stock（缺货通知）
+
+重要提示：
+- 产品ID是单个字母或数字，例如用户说"产品A"或"产品A的库存"时，product_id应该是"A"
+- 订单号是完整的数字字符串，例如用户说"订单12345"时，order_id是"12345"
+- 发货通知、延迟通知等标准场景使用send_notification，自定义邮件使用send_email
+
+示例：
+用户: "查询产品A的库存" → skill: "query_inventory", params: {{"product_id": "A"}}
+用户: "订单12345的状态" → skill: "get_order", params: {{"order_id": "12345"}}
+用户: "发送发货通知给customer@example.com" → skill: "send_notification", params: {{"to": "customer@example.com", "template": "order_shipped", "context": {{"order_id": "xxx", "tracking": "xxx", "carrier": "xxx", "eta": "xxx"}}}}
 
 请严格按照以下JSON格式返回，不要添加任何其他文字说明：
 {{

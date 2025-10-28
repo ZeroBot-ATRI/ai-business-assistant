@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 > nul
 REM AI助手 - 一键启动脚本（Windows）
 echo ====================================
 echo    AI业务助手 - 一键启动
@@ -6,7 +7,7 @@ echo ====================================
 echo.
 
 REM 检查虚拟环境
-if not exist "venv\Scripts\activate.bat" (
+if not exist "venv\Scripts\python.exe" (
     echo [错误] 未找到虚拟环境，请先运行：
     echo   python -m venv venv
     echo   venv\Scripts\activate
@@ -15,27 +16,37 @@ if not exist "venv\Scripts\activate.bat" (
     exit /b 1
 )
 
-echo [1/3] 激活虚拟环境...
-call venv\Scripts\activate.bat
+echo [1/3] 检查环境...
+set VENV_PYTHON=%CD%\venv\Scripts\python.exe
+set VENV_DIR=%CD%\venv\Scripts
+
+if not exist "%VENV_PYTHON%" (
+    echo [错误] 找不到Python: %VENV_PYTHON%
+    pause
+    exit /b 1
+)
+
+echo 虚拟环境路径: %VENV_DIR%
 
 echo.
 echo [2/3] 启动后端API（端口8000）...
-start "AI助手-后端API" cmd /k "venv\Scripts\activate.bat && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+start "AI助手-后端API" cmd /k "cd /d %CD% && %VENV_DIR%\activate.bat && uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
 REM 等待后端启动
-timeout /t 3 /nobreak > nul
+echo 等待后端启动...
+timeout /t 5 /nobreak > nul
 
 echo.
 echo [3/3] 启动前端界面...
 
 REM 启动聊天界面（端口8501）
-start "AI助手-聊天界面" cmd /k "venv\Scripts\activate.bat && streamlit run ui/app_enhanced.py --server.port 8501"
+start "AI助手-聊天界面" cmd /k "cd /d %CD% && %VENV_DIR%\activate.bat && streamlit run ui\app_enhanced.py --server.port 8501"
 
-REM 等待1秒
-timeout /t 1 /nobreak > nul
+REM 等待2秒
+timeout /t 2 /nobreak > nul
 
 REM 启动监控看板（端口8502）
-start "AI助手-监控看板" cmd /k "venv\Scripts\activate.bat && streamlit run ui/dashboard.py --server.port 8502"
+start "AI助手-监控看板" cmd /k "cd /d %CD% && %VENV_DIR%\activate.bat && streamlit run ui\dashboard.py --server.port 8502"
 
 echo.
 echo ====================================
