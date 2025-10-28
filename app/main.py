@@ -55,18 +55,30 @@ if USE_REAL_SKILLS:
 
     # 组合技能：真实技能优先，其他使用Mock
     SKILLS = {
+        # 原有真实技能
         "get_order": REAL_SKILLS["get_order"],
         "query_inventory": REAL_SKILLS["query_inventory"],
         "query_logistics": REAL_SKILLS["query_logistics"],
         # Day 5: 真实邮件通知技能
         "send_email": notification_skill.send_email,
         "send_notification": notification_skill.send_notification,
-        # 其他技能继续使用Mock（Day 6会逐步替换）
+        # Week 2 新增真实技能
+        "query_promotions": REAL_SKILLS["query_promotions"],
+        "get_customer": REAL_SKILLS["get_customer"],
+        "get_customer_orders": REAL_SKILLS["get_customer_orders"],
+        "get_refund": REAL_SKILLS["get_refund"],
+        "create_refund": REAL_SKILLS["create_refund"],
+        "approve_refund": REAL_SKILLS["approve_refund"],
+        "get_replenishment_suggestion": REAL_SKILLS["get_replenishment_suggestion"],
+        "create_replenishment": REAL_SKILLS["create_replenishment"],
+        "get_replenishment": REAL_SKILLS["get_replenishment"],
+        "generate_report": REAL_SKILLS["generate_report"],
+        # 其他技能继续使用Mock
         "update_order_status": MockSkills.update_order_status,
         "generate_apology": MockSkills.generate_apology,
         "offer_compensation": MockSkills.offer_compensation
     }
-    logger.info(f"加载了 {len(SKILLS)} 个技能（4个真实API + 3个Mock）")
+    logger.info(f"加载了 {len(SKILLS)} 个技能（13个真实API + 3个Mock）")
 else:
     logger.info("使用Mock技能...")
     from app.skills import SKILLS as SKILL_REGISTRY
@@ -77,6 +89,8 @@ else:
 orchestrator = AIOrchestrator(CLAUDE_API_KEY)
 
 # 注册所有技能到编排器
+
+# 原有技能
 orchestrator.register_skill("get_order", SKILLS["get_order"], "查询订单信息", {"order_id": "订单号"})
 orchestrator.register_skill("query_inventory", SKILLS["query_inventory"], "查询库存信息", {"product_id": "产品ID（单个字母或数字）"})
 orchestrator.register_skill("query_logistics", SKILLS["query_logistics"], "查询物流信息", {"tracking_number": "物流单号"})
@@ -85,6 +99,18 @@ orchestrator.register_skill("send_notification", SKILLS["send_notification"], "�
 orchestrator.register_skill("update_order_status", SKILLS["update_order_status"], "更新订单状态", {"order_id": "订单号", "status": "新状态"})
 orchestrator.register_skill("generate_apology", SKILLS["generate_apology"], "生成道歉信", {"order_id": "订单号", "reason": "原因"})
 orchestrator.register_skill("offer_compensation", SKILLS["offer_compensation"], "提供补偿", {"user_id": "用户ID", "policy": "补偿政策"})
+
+# Week 2 新增技能
+orchestrator.register_skill("query_promotions", SKILLS["query_promotions"], "查询促销活动", {"product_id": "产品ID（可选）", "status": "促销状态（可选）"})
+orchestrator.register_skill("get_customer", SKILLS["get_customer"], "查询客户信息", {"customer_id": "客户ID"})
+orchestrator.register_skill("get_customer_orders", SKILLS["get_customer_orders"], "查询客户订单历史", {"customer_id": "客户ID"})
+orchestrator.register_skill("get_refund", SKILLS["get_refund"], "查询退款申请详情", {"refund_id": "退款ID"})
+orchestrator.register_skill("create_refund", SKILLS["create_refund"], "创建退款申请", {"order_id": "订单号", "reason": "退款原因", "amount": "退款金额（可选）"})
+orchestrator.register_skill("approve_refund", SKILLS["approve_refund"], "审批退款申请", {"refund_id": "退款ID"})
+orchestrator.register_skill("get_replenishment_suggestion", SKILLS["get_replenishment_suggestion"], "获取智能补货建议", {"product_id": "产品ID"})
+orchestrator.register_skill("create_replenishment", SKILLS["create_replenishment"], "创建补货申请", {"product_id": "产品ID", "quantity": "补货数量", "priority": "优先级（可选）"})
+orchestrator.register_skill("get_replenishment", SKILLS["get_replenishment"], "查询补货申请详情", {"replenishment_id": "补货申请ID"})
+orchestrator.register_skill("generate_report", SKILLS["generate_report"], "生成业务报表", {"report_type": "报表类型（sales/inventory/customer）", "start_date": "开始日期（可选）", "end_date": "结束日期（可选）"})
 
 logger.info(f"AI编排器初始化完成，已注册 {len(orchestrator.skills)} 个技能")
 
